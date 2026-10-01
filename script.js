@@ -1,5 +1,9 @@
 // DOM Elements
 const playground = document.getElementById('playground');
+const question = document.getElementById('question');
+const hint = document.getElementById('hint');
+const tally = document.getElementById('tally');
+const tallyCount = document.getElementById('tallyCount');
 const btnYes = document.getElementById('btnYes');
 const btnNo = document.getElementById('btnNo');
 const modalOverlay = document.getElementById('modalOverlay');
@@ -8,14 +12,27 @@ const modalButton = document.getElementById('modalButton');
 const modalIcon = document.getElementById('modalIcon');
 const modalTitle = document.getElementById('modalTitle');
 const modalMessage = document.getElementById('modalMessage');
+const preloadContainer = document.getElementById('preloadContainer');
 
 // State
-let playgroundRect = null;
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let dodgeCount = 0;
-let yesSizeMultiplier = 1;
-let isReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+let lastDodgeAt = 0;
 let lastFocusedElement = null;
 let yesClickCount = 0;
+let lastWidth = window.innerWidth;
+
+// Hint text shown as No keeps escaping (index = dodges / 2)
+const taunts = [
+    'Take your time. There is a right answer.',
+    'Hm. That one is slippery.',
+    'It really does not want to be clicked.',
+    'Yes is right there, you know.',
+    'Yes is getting bigger. Just saying.',
+    'You are very persistent. I like that.',
+    'Okay, now you are just playing with me.',
+    'The No button has left the chat.'
+];
 
 // USER PROVIDED STICKERS (Tenor Embed IDs)
 // 1. Love Sticker (19980517)
@@ -87,24 +104,15 @@ const uniqueGifUrls = [
 ];
 const gifCache = {}; // Map URL -> Iframe Element
 
-// PRE-LOADER: Create iframes immediately
+// PRE-LOADER: create iframes up front inside a hidden container so they are ready on click.
+// (display:none would let some browsers throttle loading, so the container is hidden instead.)
 function preloadGifs() {
-    const preloadContainer = document.getElementById('preloadContainer');
-
     uniqueGifUrls.forEach(url => {
         const iframe = document.createElement('iframe');
         iframe.src = url;
-        iframe.width = "100%";
-        iframe.height = "220";
-        iframe.frameBorder = "0";
-        iframe.allowFullscreen = true;
-        iframe.loading = "eager"; // Force immediate load
-        iframe.style.borderRadius = "12px";
-        iframe.style.boxShadow = "0 4px 12px rgba(0,0,0,0.2)";
-        iframe.style.pointerEvents = "none"; // No hover interaction
-        // Note: We don't hide with display:none because some browsers throttle loading.
-        // Instead, the container is hidden.
-
+        iframe.title = 'Reaction sticker';
+        iframe.tabIndex = -1;
+        iframe.loading = 'eager';
         preloadContainer.appendChild(iframe);
         gifCache[url] = iframe;
     });
@@ -124,94 +132,140 @@ function getResult() {
     return randomResults[0];
 }
 
-function updatePlaygroundBounds() {
-    playgroundRect = playground.getBoundingClientRect();
+// --- DODGE LOGIC ---
+
+// Element rect relative to the playground
+function relRect(el) {
+    const p = playground.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return {
+        left: r.left - p.left,
+        top: r.top - p.top,
+        right: r.right - p.left,
+        bottom: r.bottom - p.top
+    };
 }
 
-function getThreshold() {
-    if (!playgroundRect) updatePlaygroundBounds();
-    const minDim = Math.min(playgroundRect.width, playgroundRect.height);
-    return Math.max(120, minDim / 4);
+function overlaps(a, b, gap) {
+    return a.left < b.right + gap && a.right > b.left - gap &&
+        a.top < b.bottom + gap && a.bottom > b.top - gap;
 }
 
-function getEdgePosition() {
-    if (!playgroundRect) updatePlaygroundBounds();
-    const padding = 18;
-    const edges = ['top', 'right', 'bottom', 'left'];
-    const edge = edges[Math.floor(Math.random() * edges.length)];
-    const maxX = playgroundRect.width - padding * 2;
-    const maxY = playgroundRect.height - padding * 2;
-    let x, y;
-    switch (edge) {
-        case 'top': x = padding + Math.random() * maxX; y = padding; break;
-        case 'right': x = playgroundRect.width - padding; y = padding + Math.random() * maxY; break;
-        case 'bottom': x = padding + Math.random() * maxX; y = playgroundRect.height - padding; break;
-        case 'left': x = padding; y = padding + Math.random() * maxY; break;
+// Move No to a random free spot inside the playground, as far from `from` as possible
+function dodge(from) {
+    const now = performance.now();
+    if (now - lastDodgeAt < 120) return;
+    lastDodgeAt = now;
+
+    // First escape: pin No where it currently sits, then let it run
+    if (!btnNo.classList.contains('loose')) {
+        // Reparent so the playground (not the animated button row) is the containing block
+        const r = relRect(btnNo);
+        btnNo.style.left = `${r.left}px`;
+        btnNo.style.top = `${r.top}px`;
+        btnNo.classList.add('loose');
+        playground.appendChild(btnNo);
+        void btnNo.offsetWidth; // commit start position so the jump animates
     }
-    return { x, y };
-}
 
-function setNoToEdge() {
-    if (isReduced) return;
-    const pos = getEdgePosition();
-    btnNo.style.left = `${pos.x}px`;
-    btnNo.style.top = `${pos.y}px`;
+    const pad = 16;
+    const width = playground.clientWidth;
+    const height = playground.clientHeight;
+    const bw = btnNo.offsetWidth;
+    const bh = btnNo.offsetHeight;
+    const current = relRect(btnNo);
+    const origin = from || { x: (current.left + current.right) / 2, y: (current.top + current.bottom) / 2 };
+    const avoid = [relRect(btnYes), relRect(question)];
+    const farEnough = Math.min(width, height) / 3;
+
+    let best = null;
+    for (let i = 0; i < 40; i++) {
+        const x = pad + Math.random() * Math.max(0, width - bw - pad * 2);
+        const y = pad + Math.random() * Math.max(0, height - bh - pad * 2);
+        const box = { left: x, top: y, right: x + bw, bottom: y + bh };
+        if (avoid.some(a => overlaps(box, a, 12))) continue;
+        const d = Math.hypot(x + bw / 2 - origin.x, y + bh / 2 - origin.y);
+        if (!best || d > best.d) best = { x, y, d };
+        if (d > farEnough) break;
+    }
+    if (!best) best = { x: pad, y: height - bh - pad };
+
+    btnNo.style.left = `${best.x}px`;
+    btnNo.style.top = `${best.y}px`;
+    btnNo.style.setProperty('--tilt', `${(Math.random() * 16 - 8).toFixed(1)}deg`);
+
     dodgeCount++;
-    if (dodgeCount % 2 === 0 && yesSizeMultiplier < 1.3) {
-        yesSizeMultiplier += 0.05;
-        btnYes.style.transform = `scale(${yesSizeMultiplier})`;
+    tallyCount.textContent = dodgeCount;
+    tally.classList.add('show');
+
+    if (dodgeCount % 2 === 0) {
+        const scale = Math.min(1.35, 1 + dodgeCount * 0.025);
+        btnYes.style.setProperty('--yes-scale', scale);
+        hint.textContent = taunts[Math.min(dodgeCount / 2, taunts.length - 1)];
+        hint.classList.remove('bump');
+        void hint.offsetWidth;
+        hint.classList.add('bump');
     }
 }
 
-function handleMouseMove(e) {
-    if (isReduced) return;
-    if (!playgroundRect) updatePlaygroundBounds();
-    const mouseX = e.clientX - playgroundRect.left;
-    const mouseY = e.clientY - playgroundRect.top;
-    const btnRect = btnNo.getBoundingClientRect();
-    const btnCenterX = btnRect.left + btnRect.width / 2 - playgroundRect.left;
-    const btnCenterY = btnRect.top + btnRect.height / 2 - playgroundRect.top;
-    const dx = mouseX - btnCenterX;
-    const dy = mouseY - btnCenterY;
-    const distance = Math.hypot(dx, dy);
-    if (distance < getThreshold()) setNoToEdge();
+// Mouse: run away before the cursor even reaches the button
+function handlePointerMove(e) {
+    if (e.pointerType !== 'mouse') return;
+    const p = playground.getBoundingClientRect();
+    const x = e.clientX - p.left;
+    const y = e.clientY - p.top;
+    const r = relRect(btnNo);
+    const dx = Math.max(r.left - x, 0, x - r.right);
+    const dy = Math.max(r.top - y, 0, y - r.bottom);
+    if (Math.hypot(dx, dy) < 56) dodge({ x, y });
 }
 
-function handleNoHover() {
-    if (isReduced) return;
-    setNoToEdge();
-}
-
-function handleNoClick(e) {
+function handleNoPress(e) {
     e.preventDefault();
     e.stopPropagation();
-    setNoToEdge();
+    dodge();
 }
 
-function handleNoTouch(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    setNoToEdge();
+// Little burst of hearts from the Yes button
+function burstHearts() {
+    if (reduceMotion.matches) return;
+    const r = btnYes.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    for (let i = 0; i < 18; i++) {
+        const heart = document.createElement('span');
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 90 + Math.random() * 140;
+        heart.className = 'heart';
+        heart.textContent = '♥';
+        heart.style.left = `${cx}px`;
+        heart.style.top = `${cy}px`;
+        heart.style.setProperty('--dx', `${Math.cos(angle) * dist}px`);
+        heart.style.setProperty('--dy', `${Math.sin(angle) * dist - 60}px`);
+        heart.style.setProperty('--r', `${Math.random() * 120 - 60}deg`);
+        heart.style.setProperty('--s', (0.8 + Math.random()).toFixed(2));
+        heart.addEventListener('animationend', () => heart.remove());
+        document.body.appendChild(heart);
+    }
 }
 
 // Event: Yes button click - show STICKER INSTANTLY
 function handleYesClick() {
     const result = getResult();
     yesClickCount++;
+    burstHearts();
 
     modalTitle.textContent = result.title;
     modalMessage.textContent = result.message;
 
-    // Grab cached iframe
+    // Move the already-loaded iframe into the modal (moving keeps its loaded state)
+    modalIcon.innerHTML = '';
     const cachedFrame = gifCache[result.gif];
-    modalIcon.innerHTML = ''; // Clear previous
     if (cachedFrame) {
-        // Move iframe from preload to modal
-        // Note: Moving DOM nodes preserves their state (loaded content)
         modalIcon.appendChild(cachedFrame);
     } else {
         // Fallback (race condition protection)
-        modalIcon.innerHTML = `<iframe src="${result.gif}" width="100%" height="220" frameBorder="0" allowfullscreen style="border-radius: 12px; pointer-events: none;">`;
+        modalIcon.innerHTML = `<iframe src="${result.gif}" title="Reaction sticker" tabindex="-1"></iframe>`;
     }
 
     lastFocusedElement = document.activeElement;
@@ -221,17 +275,11 @@ function handleYesClick() {
 
 function closeModal() {
     modalOverlay.classList.remove('active');
-    // Move frame back to cache container? 
-    // Ideally we'd clone or manage it, but simple append works.
-    // If we close, the frame is effectively hidden.
-    // To allow reuse, we should move it back if we want to keep it "alive" 
-    // without reloading, OR just re-append it next time (which is what we do).
-    // The issue is if we clear innerHTML, we might lose it if not appended elsewhere.
 
-    // Better strategy for "close": Move the child BACK to preloadContainer so it stays alive
+    // Move the frame back to the preload container so it stays alive for next time
     const currentFrame = modalIcon.firstElementChild;
     if (currentFrame && currentFrame.tagName === 'IFRAME') {
-        document.getElementById('preloadContainer').appendChild(currentFrame);
+        preloadContainer.appendChild(currentFrame);
     }
 
     if (lastFocusedElement) {
@@ -245,17 +293,25 @@ function handleOverlayClick(e) {
     }
 }
 
+// Layout changed width: put No back beside Yes (height-only changes are mobile address-bar noise)
+function handleResize() {
+    if (window.innerWidth === lastWidth) return;
+    lastWidth = window.innerWidth;
+    btnNo.classList.remove('loose');
+    btnYes.after(btnNo);
+    btnNo.style.left = '';
+    btnNo.style.top = '';
+}
+
 function init() {
-    updatePlaygroundBounds();
-    setNoToEdge();
     preloadGifs(); // START EAGER LOADING NOW
 
-    playground.addEventListener('mousemove', handleMouseMove);
-    btnNo.addEventListener('mouseenter', handleNoHover);
-    btnNo.addEventListener('click', handleNoClick);
-    btnYes.addEventListener('click', handleYesClick);
-    btnNo.addEventListener('touchstart', handleNoTouch, { passive: false });
+    playground.addEventListener('pointermove', handlePointerMove);
+    btnNo.addEventListener('mouseenter', () => dodge());
+    btnNo.addEventListener('click', handleNoPress);
+    btnNo.addEventListener('touchstart', handleNoPress, { passive: false });
     btnNo.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+    btnYes.addEventListener('click', handleYesClick);
     modalClose.addEventListener('click', closeModal);
     modalButton.addEventListener('click', closeModal);
     modalOverlay.addEventListener('click', handleOverlayClick);
@@ -266,9 +322,7 @@ function init() {
     let resizeTimer;
     window.addEventListener('resize', () => {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(() => {
-            updatePlaygroundBounds();
-        }, 150);
+        resizeTimer = setTimeout(handleResize, 150);
     });
 }
 
