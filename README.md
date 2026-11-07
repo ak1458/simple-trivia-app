@@ -1,12 +1,24 @@
-# Simple Trivia App
+# Simple Trivia
 
-[![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-F7DF1E?logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
-[![HTML5](https://img.shields.io/badge/HTML5-Semantic-E34F26?logo=html5&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/HTML)
-[![CSS3](https://img.shields.io/badge/CSS3-Styled-1572B6?logo=css3&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/CSS)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+A small browser entertainment project built with HTML, CSS, and JavaScript.
 
-Lightweight entertainment web app delivering curated jokes and interactive trivia questions. Pure vanilla JavaScript with a clean, responsive UI.
+[![JavaScript: Browser](https://img.shields.io/badge/JavaScript-Browser-EAB308?style=flat-square&logo=javascript&logoColor=white)](script.js)
+[![License: MIT](https://img.shields.io/badge/License-MIT-64748B?style=flat-square)](LICENSE)
+
+[Source](script.js)
+
+## Run
+
+Clone or download the repository, then open `index.html` in a browser. No package install or build step is required.
+
+## Files
+
+- `index.html` — page structure.
+- `style.css` — styling.
+- `script.js` — interaction and game logic.
+
+This is a learning-sized project. It is kept separate from the larger application portfolio.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
